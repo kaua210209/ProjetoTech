@@ -78,7 +78,7 @@ export default function AdminDashboard() {
             // 1. Atualiza o status do aluguel
             const { error: rentalError } = await supabase
                 .from('rentals')
-                .update({ status: 'Devolvido', data_devolucao_real: hoje })
+                .update({ status: 'Devolvido', data_devolucao: hoje })
                 .eq('id', rentalId);
 
             if (rentalError) throw rentalError;
