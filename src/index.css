@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Configuração das cores do tema da biblioteca no v4 */
+@theme {
+  --color-library-bg: #FDFBF7;
+  --color-library-brown: #8B5A2B;
+  --color-library-green: #2C4C3B;
+  --color-library-light-green: #E8F0EB;
+}
