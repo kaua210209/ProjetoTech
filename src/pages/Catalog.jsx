@@ -57,7 +57,6 @@ export default function Catalog() {
       {/* HEADER RESPONSIVO */}
       <header className="flex flex-col sm:flex-row justify-between items-center gap-4 mb-8 py-4 border-b border-gray-200">
         <div className="flex items-center gap-2 text-library-green">
-          <img className='w-15' src="/public/favicon.png" alt="" />
           <h1 className="text-2xl sm:text-3xl font-bold">BiblioTech</h1>
         </div>
         

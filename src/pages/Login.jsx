@@ -36,7 +36,6 @@ export default function Login() {
         
         {/* Cabeçalho do Login */}
         <div className="flex flex-col items-center justify-center mb-8 text-library-green">
-          <img className='w-20' src="/public/favicon.png" alt="" />
           <h2 className="text-2xl font-bold text-gray-800">BiblioTech Admin</h2>
           <p className="text-sm text-gray-500">Acesso exclusivo para bibliotecários</p>
         </div>
