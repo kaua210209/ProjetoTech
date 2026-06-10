@@ -8,12 +8,17 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   const [loading, setLoading] = useState(false);
   const [availableBooks, setAvailableBooks] = useState([]);
   
+  // NOVOS ESTADOS PARA GESTÃO DE ALUNOS
+  const [students, setStudents] = useState([]);
+  const [selectedStudentId, setSelectedStudentId] = useState('');
+  const [isNewStudent, setIsNewStudent] = useState(false); // false = seleciona existente, true = cadastra novo
+
   const hoje = new Date().toISOString().split('T')[0];
 
   const [formData, setFormData] = useState({
     aluno_nome: '',
     aluno_turma: '',
-    aluno_whatsapp: '', // Novo campo adicionado
+    aluno_whatsapp: '',
     book_id: '',
     data_aluguel: hoje,
     tempo_limite: 7
@@ -22,12 +27,17 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   useEffect(() => {
     if (isOpen) {
       fetchAvailableBooks();
-      setFormData(prev => ({
-        ...prev,
+      fetchStudents(); // Carrega os alunos ao abrir o modal
+      setFormData({
+        aluno_nome: '',
+        aluno_turma: '',
+        aluno_whatsapp: '',
+        book_id: '',
         data_aluguel: hoje,
-        tempo_limite: 7,
-        aluno_whatsapp: ''
-      }));
+        tempo_limite: 7
+      });
+      setSelectedStudentId('');
+      setIsNewStudent(false);
     }
   }, [isOpen]);
 
@@ -38,8 +48,17 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
       .gt('quantidade', 0)
       .order('titulo', { ascending: true });
     
-    if (error) toast.error('Erro ao buscar livros disponíveis');
-    else setAvailableBooks(data);
+    if (!error && data) setAvailableBooks(data);
+  };
+
+  // NOVA FUNÇÃO: Procura os alunos registados na nova tabela
+  const fetchStudents = async () => {
+    const { data, error } = await supabase
+      .from('students')
+      .select('*')
+      .order('nome', { ascending: true });
+    
+    if (!error && data) setStudents(data);
   };
 
   const handleChange = (e) => {
@@ -47,53 +66,88 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.book_id) {
-      toast.error('Por favor, selecione um livro!');
+  // NOVA FUNÇÃO: Trata a seleção de um aluno existente e preenche o formulário
+  const handleStudentChange = (studentId) => {
+    setSelectedStudentId(studentId);
+    if (studentId === '') {
+      setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' }));
       return;
     }
+    const student = students.find(s => s.id === studentId);
+    if (student) {
+      setFormData(prev => ({
+        ...prev,
+        aluno_nome: student.nome,
+        aluno_turma: student.turma || '',
+        aluno_whatsapp: student.whatsapp || ''
+      }));
+    }
+  };
 
+  const handleSubmit = async (e) => {
+    e.preventDefault();
     setLoading(true);
 
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      const dataCalculada = new Date(formData.data_aluguel + 'T12:00:00');
-      dataCalculada.setDate(dataCalculada.getDate() + parseInt(formData.tempo_limite));
-      const dataDevolucaoFinal = dataCalculada.toISOString().split('T')[0];
+      const dataAluguelObj = new Date(formData.data_aluguel + 'T00:00:00');
+      dataAluguelObj.setDate(dataAluguelObj.getDate() + parseInt(formData.tempo_limite, 10));
+      const dataDevolucao = dataAluguelObj.toISOString().split('T')[0];
 
-      // Envia os dados incluindo o WhatsApp do aluno
-      const { error: rentalError } = await supabase.from('rentals').insert([{
-        book_id: formData.book_id,
-        user_id: session?.user?.id,
-        bibliotecario_email: session?.user?.email,
-        aluno_nome: formData.aluno_nome,
-        aluno_turma: formData.aluno_turma,
-        aluno_whatsapp: formData.aluno_whatsapp, // Salvando no banco
-        data_aluguel: formData.data_aluguel,
-        data_devolucao: dataDevolucaoFinal,
-        status: 'Ativo'
-      }]);
+      const { data: sessionData } = await supabase.auth.getSession();
+      const emailBibliotecario = sessionData?.session?.user?.email || 'Sistema';
+
+      // PASSO NOVO: Se marcou como Novo Aluno, guarda primeiro na base de dados de alunos
+      if (isNewStudent && formData.aluno_nome.trim() !== '') {
+        const { error: studentError } = await supabase
+          .from('students')
+          .insert([{
+            nome: formData.aluno_nome.trim(),
+            turma: formData.aluno_turma,
+            whatsapp: formData.aluno_whatsapp
+          }]);
+        
+        if (studentError) throw studentError;
+      }
+
+      // Criação do aluguer normal (mantendo a compatibilidade da sua tabela antiga)
+      const { error: rentalError } = await supabase
+        .from('rentals')
+        .insert([{
+          aluno_nome: formData.aluno_nome,
+          aluno_turma: formData.aluno_turma,
+          aluno_whatsapp: formData.aluno_whatsapp,
+          book_id: formData.book_id,
+          data_aluguel: formData.data_aluguel,
+          data_devolucao: dataDevolucao,
+          bibliotecario_email: emailBibliotecario,
+          status: 'Ativo'
+        }]);
 
       if (rentalError) throw rentalError;
 
-      const selectedBook = availableBooks.find(b => b.id === formData.book_id);
-      const { error: bookError } = await supabase
+      // Desconto de estoque do Livro
+      const { data: bookData, error: bookFetchError } = await supabase
         .from('books')
-        .update({ quantidade: selectedBook.quantidade - 1 })
+        .select('quantidade')
+        .eq('id', formData.book_id)
+        .single();
+
+      if (bookFetchError) throw bookFetchError;
+
+      const { error: bookUpdateError } = await supabase
+        .from('books')
+        .update({ quantidade: Math.max(0, bookData.quantidade - 1) })
         .eq('id', formData.book_id);
 
-      if (bookError) throw bookError;
+      if (bookUpdateError) throw bookUpdateError;
 
       toast.success('Aluguel registrado com sucesso!');
       onRentalAdded();
       onClose();
-      setFormData({ aluno_nome: '', aluno_turma: '', aluno_whatsapp: '', book_id: '', data_aluguel: hoje, tempo_limite: 7 });
 
     } catch (error) {
-      toast.error('Erro ao registrar aluguel.');
       console.error(error);
+      toast.error('Erro ao registrar aluguel.');
     } finally {
       setLoading(false);
     }
@@ -102,68 +156,185 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-xl shadow-xl w-full max-w-md overflow-hidden">
-        <div className="flex justify-between items-center p-6 border-b border-gray-100 bg-library-light-green">
-          <div className="flex items-center gap-2 text-library-green">
-            <BookUser size={24} />
-            <h2 className="text-xl font-bold">Registrar Novo Aluguel</h2>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-fade-in">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden transform transition-all animate-scale-in">
+        
+        {/* Header */}
+        <div className="bg-library-green p-4 text-white flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <BookUser size={20} />
+            <h3 className="font-bold text-lg">Novo Aluguel de Livro</h3>
           </div>
-          <button onClick={onClose} className="text-gray-500 hover:text-gray-800 transition">
-            <X size={24} />
+          <button onClick={onClose} className="hover:bg-white/20 p-1 rounded-full transition cursor-pointer">
+            <X size={20} />
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Nome Completo do Aluno</label>
-            <input required type="text" name="aluno_nome" value={formData.aluno_nome} onChange={handleChange} placeholder="Ex: Kauã Anderson" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" />
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+          
+          {/* SELETOR INTERNO: ALUNO NOVO OU EXISTENTE */}
+          <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-xl">
+            <button
+              type="button"
+              onClick={() => {
+                setIsNewStudent(false);
+                setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' }));
+                setSelectedStudentId('');
+              }}
+              className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${!isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              Aluno Cadastrado
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setIsNewStudent(true);
+                setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' }));
+                setSelectedStudentId('');
+              }}
+              className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              + Novo Aluno
+            </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Turma / Turno</label>
-              <input required type="text" name="aluno_turma" value={formData.aluno_turma} onChange={handleChange} placeholder="Ex: 3º ano EM" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" />
-            </div>
-            {/* NOVO CAMPO: WHATSAPP DO ALUNO */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                <Phone size={14} /> WhatsApp
-              </label>
-              <input required type="text" name="aluno_whatsapp" value={formData.aluno_whatsapp} onChange={handleChange} placeholder="DDD + Número" className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Livro Escolhido</label>
-            <select required name="book_id" value={formData.book_id} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white">
-              <option value="" disabled>Selecione um livro...</option>
-              {availableBooks.map(book => (
-                <option key={book.id} value={book.id}>
-                  {book.codigo} - {book.titulo} ({book.quantidade} disp.)
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
+          {/* EXIBE LISTA SE O ALUNO FOR JÁ CADASTRADO */}
+          {!isNewStudent && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                <Calendar size={14} /> Data do Aluguel
+                <BookUser size={14} /> Selecionar Aluno Registrado
               </label>
-              <input required type="date" name="data_aluguel" value={formData.data_aluguel} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
+              <select
+                required={!isNewStudent}
+                value={selectedStudentId}
+                onChange={(e) => handleStudentChange(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
+              >
+                <option value="">-- Escolha o Aluno da Lista --</option>
+                {students.map(s => (
+                  <option key={s.id} value={s.id}>{s.nome} ({s.turma || 'Sem Turma'})</option>
+                ))}
+              </select>
             </div>
+          )}
+
+          {/* DADOS DO ALUNO (SÓ PODEM SER EDITADOS SE FOR "NOVO ALUNO") */}
+          <div className="space-y-3 pt-2 border-t border-gray-100">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                <Clock size={14} /> Tempo Limite (Dias)
+                <BookUser size={14} /> Nome do Aluno
               </label>
-              <input required type="number" min="1" name="tempo_limite" value={formData.tempo_limite} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
+              <input
+                required
+                disabled={!isNewStudent}
+                type="text"
+                name="aluno_nome"
+                value={formData.aluno_nome}
+                onChange={handleChange}
+                placeholder={isNewStudent ? "Nome completo do aluno" : "Selecione o aluno na lista acima"}
+                className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Turma</label>
+                <input
+                  required
+                  disabled={!isNewStudent}
+                  type="text"
+                  name="aluno_turma"
+                  value={formData.aluno_turma}
+                  onChange={handleChange}
+                  placeholder="Ex: 3º Ano A"
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <Phone size={14} /> WhatsApp
+                </label>
+                <input
+                  required
+                  disabled={!isNewStudent}
+                  type="text"
+                  name="aluno_whatsapp"
+                  value={formData.aluno_whatsapp}
+                  onChange={handleChange}
+                  placeholder="(00) 00000-0000"
+                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
+                />
+              </div>
             </div>
           </div>
 
+          {/* SELEÇÃO DO LIVRO */}
+          <div className="space-y-3 pt-2 border-t border-gray-100">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Livro Disponível</label>
+              <select
+                required
+                name="book_id"
+                value={formData.book_id}
+                onChange={handleChange}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
+              >
+                <option value="">-- Selecione o livro --</option>
+                {availableBooks.map(book => (
+                  <option key={book.id} value={book.id}>
+                    {book.titulo} ({book.codigo}) - Disponíveis: {book.quantidade}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* DATAS */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <Calendar size={14} /> Data do Aluguel
+                </label>
+                <input
+                  required
+                  type="date"
+                  name="data_aluguel"
+                  value={formData.data_aluguel}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                  <Clock size={14} /> Tempo Limite (Dias)
+                </label>
+                <input
+                  required
+                  type="number"
+                  min="1"
+                  name="tempo_limite"
+                  value={formData.tempo_limite}
+                  onChange={handleChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* BOTÕES DE AÇÃO */}
           <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer">Cancelar</button>
-            <button type="submit" disabled={loading} className="px-4 py-2 text-white bg-library-brown rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 cursor-pointer">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer text-sm font-medium"
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 font-medium text-sm cursor-pointer"
+            >
               {loading ? 'Registrando...' : 'Confirmar Aluguel'}
             </button>
           </div>

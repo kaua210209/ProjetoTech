@@ -2,11 +2,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock } from 'lucide-react';
+import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock, BarChart3 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AddBookModal from '../components/AddBookModal';
 import AddRentalModal from '../components/AddRentalModal';
 import EditBookModal from '../components/EditBookModal';
+import Barcode from 'react-barcode';
 
 export default function AdminDashboard() {
     const navigate = useNavigate();
@@ -15,7 +16,7 @@ export default function AdminDashboard() {
 
     const [rentals, setRentals] = useState([]);
     const [books, setBooks] = useState([]);
-    const [stats, setStats] = useState({ total: 0, ativos: 0, atrasados: 0 });
+    const [stats, setStats] = useState({ total: 0, ativos: 0, atrasados: 0, livrosTotal: 0 });
 
     // Controles de visibilidade dos Modais e Menus
     const [isMenuMobileOpen, setIsMenuMobileOpen] = useState(false);
@@ -41,27 +42,46 @@ export default function AdminDashboard() {
     };
 
     const fetchRentals = async () => {
-        const { data, error } = await supabase
-            .from('rentals')
-            .select('*, books(titulo, codigo)')
-            .order('created_at', { ascending: false });
+        try {
+            // 1. Busca os dados dos aluguéis do banco de dados
+            const { data: rentalsData, error: rentalsError } = await supabase
+                .from('rentals')
+                .select('*, books(titulo, codigo, categoria)')
+                .order('created_at', { ascending: false });
 
-        if (error) {
-            toast.error('Erro ao carregar aluguéis');
-            return;
+            if (rentalsError) throw rentalsError;
+            setRentals(rentalsData);
+
+            // 2. Busca os dados atualizados dos livros diretamente da tabela 'books'
+            const { data: booksData, error: booksError } = await supabase
+                .from('books')
+                .select('quantidade');
+
+            if (booksError) throw booksError;
+
+            // 3. Força a conversão para número inteiro (evita problemas se o banco retornar texto ou nulo)
+            const totalLivrosEstoque = booksData.reduce((acc, book) => {
+                const qtd = parseInt(book.quantidade, 10);
+                return acc + (isNaN(qtd) ? 0 : qtd);
+            }, 0);
+
+            // 4. Calcula as métricas de prazos dos aluguéis ativos e atrasados
+            const hoje = new Date();
+            const totalAtivos = rentalsData.filter(r => r.status === 'Ativo').length;
+            const totalAtrasados = rentalsData.filter(r => r.status === 'Ativo' && new Date(r.data_devolucao + 'T23:59:59') < hoje).length;
+
+            // 5. Atualiza o estado unificado com os valores exatos e convertidos
+            setStats({
+                total: rentalsData.length,
+                ativos: totalAtivos - totalAtrasados,
+                atrasados: totalAtrasados,
+                livrosTotal: totalLivrosEstoque
+            });
+
+        } catch (error) {
+            console.error("Erro detalhado no painel:", error);
+            toast.error('Erro ao carregar dados do painel');
         }
-        setRentals(data);
-
-        // Calcula as métricas reais do topo do painel
-        const hoje = new Date();
-        const totalAtivos = data.filter(r => r.status === 'Ativo').length;
-        const totalAtrasados = data.filter(r => r.status === 'Ativo' && new Date(r.data_devolucao + 'T23:59:59') < hoje).length;
-
-        setStats({
-            total: data.length,
-            ativos: totalAtivos - totalAtrasados, // Ativos reais que estão dentro do prazo
-            atrasados: totalAtrasados
-        });
     };
 
     const fetchBooks = async () => {
@@ -162,6 +182,120 @@ export default function AdminDashboard() {
 
     const filteredRentals = getFilteredRentals();
 
+    const buscarLeitorDoMes = async () => {
+        const inicioDoMes = new Date();
+        inicioDoMes.setDate(1); // Define como dia 1 do mês atual
+        inicioDoMes.setHours(0, 0, 0, 0);
+
+        // Busca todos os aluguéis criados a partir do início do mês
+        const { data, error } = await supabase
+            .from('rentals')
+            .select('aluno_nome')
+            .gte('created_at', inicioDoMes.toISOString());
+
+        if (error) return;
+
+        // Agrupa e conta quantos livros cada aluno pegou
+        const contagem = data.reduce((acc, rental) => {
+            acc[rental.aluno_nome] = (acc[rental.aluno_nome] || 0) + 1;
+            return acc;
+        }, {});
+
+        // Transforma em array e ordena do maior para o menor
+        const ranking = Object.entries(contagem)
+            .map(([nome, total]) => ({ nome, total }))
+            .sort((a, b) => b.total - a.total);
+
+        console.log("O campeão de leituras deste mês é:", ranking[0]);
+        // Você pode salvar isso em um estado e mostrar um card dourado de destaque no seu Dashboard!
+    };
+
+    const obterEstatisticasAvancadas = () => {
+        if (!rentals || rentals.length === 0) return { rankingAlunos: [], generoMaisLido: 'Nenhum', totalGenero: 0 };
+
+        // 1. Contagem de Livros por Aluno
+        const contagemAlunos = rentals.reduce((acc, r) => {
+            if (r.aluno_nome) {
+                acc[r.aluno_nome] = acc[r.aluno_nome] || { nome: r.aluno_nome, turma: r.aluno_turma, total: 0 };
+                acc[r.aluno_nome].total += 1;
+            }
+            return acc;
+        }, {});
+
+        // Ordena os alunos do que pegou mais livros para o que pegou menos
+        const rankingAlunos = Object.values(contagemAlunos).sort((a, b) => b.total - a.total);
+
+        // 2. Contagem por Gênero Literário
+        const contagemGeneros = rentals.reduce((acc, r) => {
+            const genero = r.books?.categoria || 'Não Informado';
+            acc[genero] = (acc[genero] || 0) + 1;
+            return acc;
+        }, {});
+
+        // Encontra o gênero com maior número de aluguéis
+        let generoMaisLido = 'Nenhum';
+        let totalGenero = 0;
+        Object.entries(contagemGeneros).forEach(([genero, total]) => {
+            if (total > totalGenero) {
+                generoMaisLido = genero;
+                totalGenero = total;
+            }
+        });
+
+        return { rankingAlunos, generoMaisLido, totalGenero };
+    };
+
+    const { rankingAlunos, generoMaisLido, totalGenero } = obterEstatisticasAvancadas();
+    const leitorDoMes = rankingAlunos[0] || { nome: 'Nenhum aluno cadastrado ainda', total: 0, turma: '' };
+
+    const imprimirEtiqueta = (codigo, titulo) => {
+        // Abre uma janela pop-up apenas para a impressão
+        const janelaImpressao = window.open('', '_blank', 'width=400,height=400');
+        janelaImpressao.document.write(`
+    <html>
+      <head>
+        <title>Imprimir Etiqueta - ${codigo}</title>
+        <style>
+          body { 
+            font-family: Arial, sans-serif; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            height: 100vh; 
+            margin: 0; 
+            text-align: center;
+          }
+          .titulo { font-size: 12px; font-weight: bold; margin-bottom: 5px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          @media print {
+            body { height: auto; }
+          }
+        </style>
+        <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+      </head>
+      <body>
+        <div class="titulo">${titulo}</div>
+        <svg id="barcode"></svg>
+        <script>
+          JsBarcode("#barcode", "${codigo}", {
+            format: "CODE128",
+            width: 1.5,
+            height: 40,
+            displayValue: true,
+            fontSize: 12
+          });
+          // Dispara o comando de impressão e fecha a aba depois
+          setTimeout(() => {
+            window.print();
+            window.close();
+          }, 500);
+        </script>
+      </body>
+    </html>
+  `);
+        janelaImpressao.document.close();
+    };
+
     return (
         <div className="flex flex-col md:flex-row min-h-screen bg-gray-100">
             {/* TOPO MOBILE */}
@@ -174,41 +308,47 @@ export default function AdminDashboard() {
 
             {/* SIDEBAR */}
             {/* SIDEBAR RESPONSIVA - CORRIGIDA SEM SUMIR COM AS FUNÇÕES */}
-<aside className={`bg-library-green text-white flex flex-col transition-transform duration-300 z-30
-    ${isMenuMobileOpen 
-        ? 'fixed inset-x-0 bottom-0 top-[60px] translate-x-0' 
-        : 'fixed inset-y-0 left-0 -translate-x-full md:sticky md:top-0 md:translate-x-0 md:w-64 md:h-screen md:z-10'
-    }`}
->
-    {/* Título - Só visível no Computador */}
-    <div className="p-6 text-2xl font-bold border-b border-white/20 hidden md:block">BiblioTech Admin</div>
-    
-    {/* Área dos Botões com Rolagem caso a tela do celular seja pequena ou deitada */}
-    <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
-        <button 
-            onClick={() => { setActiveTab('alugueis'); setIsMenuMobileOpen(false); }} 
-            className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'alugueis' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
-        >
-            <Users size={20} /> Aluguéis
-        </button>
-        <button 
-            onClick={() => { setActiveTab('livros'); setIsMenuMobileOpen(false); }} 
-            className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'livros' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
-        >
-            <Book size={20} /> Livros (Estoque)
-        </button>
-    </nav>
-    
-    {/* Contêiner do Botão Sair fixado na base do menu de forma limpa */}
-    <div className="p-4 border-t border-white/10 bg-library-green">
-        <button 
-            onClick={handleLogout} 
-            className="w-full p-3 flex items-center justify-center gap-2 hover:bg-red-600 transition rounded-lg bg-red-500 font-semibold text-sm cursor-pointer"
-        >
-            <LogOut size={16} /> Sair
-        </button>
-    </div>
-</aside>
+            <aside className={`bg-library-green text-white flex flex-col transition-transform duration-300 z-30
+    ${isMenuMobileOpen
+                    ? 'fixed inset-x-0 bottom-0 top-[60px] translate-x-0'
+                    : 'fixed inset-y-0 left-0 -translate-x-full md:sticky md:top-0 md:translate-x-0 md:w-64 md:h-screen md:z-10'
+                }`}
+            >
+                {/* Título - Só visível no Computador */}
+                <div className="p-6 text-2xl font-bold border-b border-white/20 hidden md:block">BiblioTech Admin</div>
+
+                {/* Área dos Botões com Rolagem caso a tela do celular seja pequena ou deitada */}
+                <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                    <button
+                        onClick={() => { setActiveTab('alugueis'); setIsMenuMobileOpen(false); }}
+                        className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'alugueis' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
+                    >
+                        <Users size={20} /> Aluguéis
+                    </button>
+                    <button
+                        onClick={() => { setActiveTab('livros'); setIsMenuMobileOpen(false); }}
+                        className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'livros' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
+                    >
+                        <Book size={20} /> Livros (Estoque)
+                    </button>
+                    <button
+                        onClick={() => { setActiveTab('estatisticas'); setIsMenuMobileOpen(false); }}
+                        className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'estatisticas' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
+                    >
+                        <BarChart3 size={20} /> Estatísticas e Ranking
+                    </button>
+                </nav>
+
+                {/* Contêiner do Botão Sair fixado na base do menu de forma limpa */}
+                <div className="p-4 border-t border-white/10 bg-library-green">
+                    <button
+                        onClick={handleLogout}
+                        className="w-full p-3 flex items-center justify-center gap-2 hover:bg-red-600 transition rounded-lg bg-red-500 font-semibold text-sm cursor-pointer"
+                    >
+                        <LogOut size={16} /> Sair
+                    </button>
+                </div>
+            </aside>
 
             {/* CONTEÚDO */}
             <main className="flex-1 p-4 sm:p-8 overflow-y-auto">
@@ -219,6 +359,8 @@ export default function AdminDashboard() {
                     <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500"><p className="text-gray-500 text-xs font-semibold">Aluguéis no Prazo</p><p className="text-2xl font-bold mt-1 text-blue-600">{stats.ativos}</p></div>
                     <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500"><p className="text-gray-500 text-xs font-semibold">Aluguéis Atrasados</p><p className="text-2xl font-bold mt-1 text-red-600">{stats.atrasados}</p></div>
                     <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500"><p className="text-gray-500 text-xs font-semibold">Histórico Total</p><p className="text-2xl font-bold mt-1 text-green-600">{stats.total}</p></div>
+                    <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-purple-500"><p className="text-gray-500 text-xs font-semibold">Total de Livros (Acervo)</p><p className="text-2xl font-bold mt-1 text-purple-600">{stats.livrosTotal}</p>
+                    </div>
                 </div>
 
                 {/* SEÇÃO DE ALUGUÉIS COM SUB-ABAS */}
@@ -234,8 +376,8 @@ export default function AdminDashboard() {
                                 <button
                                     onClick={() => setStatusFilter('no_prazo')}
                                     className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-[11px] sm:text-xs font-bold transition shadow-sm cursor-pointer border ${statusFilter === 'no_prazo'
-                                            ? 'bg-white text-blue-600 border-gray-200'
-                                            : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
+                                        ? 'bg-white text-blue-600 border-gray-200'
+                                        : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
                                         }`}
                                 >
                                     <Clock size={14} /> No Prazo
@@ -243,8 +385,8 @@ export default function AdminDashboard() {
                                 <button
                                     onClick={() => setStatusFilter('atrasados')}
                                     className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-[11px] sm:text-xs font-bold transition shadow-sm cursor-pointer border ${statusFilter === 'atrasados'
-                                            ? 'bg-white text-red-600 border-gray-200'
-                                            : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
+                                        ? 'bg-white text-red-600 border-gray-200'
+                                        : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
                                         }`}
                                 >
                                     <CalendarX size={14} /> Atrasados
@@ -252,8 +394,8 @@ export default function AdminDashboard() {
                                 <button
                                     onClick={() => setStatusFilter('devolvidos')}
                                     className={`flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-[11px] sm:text-xs font-bold transition shadow-sm cursor-pointer border ${statusFilter === 'devolvidos'
-                                            ? 'bg-white text-green-600 border-gray-200'
-                                            : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
+                                        ? 'bg-white text-green-600 border-gray-200'
+                                        : 'bg-transparent text-gray-600 border-transparent hover:bg-white/50'
                                         }`}
                                 >
                                     <CalendarCheck size={14} /> Devolvidos
@@ -320,7 +462,7 @@ export default function AdminDashboard() {
                                                     </td>
                                                     <td className="p-4">
                                                         <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${rental.status === 'Devolvido' ? 'bg-green-100 text-green-800' :
-                                                                statusFilter === 'atrasados' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'
+                                                            statusFilter === 'atrasados' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'
                                                             }`}>
                                                             {rental.status === 'Devolvido' ? 'Devolvido' : statusFilter === 'atrasados' ? 'Atrasado' : 'No Prazo'}
                                                         </span>
@@ -355,7 +497,7 @@ export default function AdminDashboard() {
                                                     <p className="text-xs text-gray-500">{rental.aluno_turma}</p>
                                                 </div>
                                                 <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${rental.status === 'Devolvido' ? 'bg-green-100 text-green-800' :
-                                                        statusFilter === 'atrasados' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'
+                                                    statusFilter === 'atrasados' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'
                                                     }`}>{rental.status === 'Devolvido' ? 'Devolvido' : statusFilter === 'atrasados' ? 'Atrasado' : 'No Prazo'}</span>
                                             </div>
                                             <div className="text-xs text-gray-700 bg-gray-50 p-2 rounded space-y-1">
@@ -393,17 +535,50 @@ export default function AdminDashboard() {
                             <table className="w-full text-left border-collapse">
                                 <thead>
                                     <tr className="bg-gray-50 text-gray-600 text-xs uppercase tracking-wider">
-                                        <th className="p-4">Capa</th><th className="p-4">Código / Título</th><th className="p-4">Autor</th><th className="p-4 text-center">Estoque</th><th className="p-4 text-center">Ações</th>
+                                        <th className="p-4">Capa</th>
+                                        <th className="p-4">Código / Título</th>
+                                        <th className="p-4">Código de Barras (Imprimir)</th>
+                                        <th className="p-4">Autor</th>
+                                        <th className="p-4 text-center">Estoque</th>
+                                        <th className="p-4 text-center">Ações</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100 text-sm">
                                     {books.map(book => (
                                         <tr key={book.id} className="hover:bg-gray-50">
-                                            <td className="p-4"><img src={book.capa_url || 'https://via.placeholder.com/40x60?text=No+Cover'} alt="Capa" className="w-10 h-14 object-contain rounded bg-gray-100 shadow-sm" /></td>
-                                            <td className="p-4 font-medium"><span className="text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600 font-mono">{book.codigo}</span><div className="mt-1 text-gray-900 font-semibold">{book.titulo}</div></td>
+                                            <td className="p-4">
+                                                <img src={book.capa_url || 'https://via.placeholder.com/40x60?text=No+Cover'} alt="Capa" className="w-10 h-14 object-contain rounded bg-gray-100 shadow-sm" />
+                                            </td>
+                                            <td className="p-4 font-medium">
+                                                <span className="text-xs bg-gray-100 px-2 py-0.5 rounded text-gray-600 font-mono">{book.codigo}</span>
+                                                <div className="mt-1 text-gray-900 font-semibold">{book.titulo}</div>
+                                            </td>
+
+                                            {/* CÓDIGO DE BARRAS DA TABELA PC */}
+                                            <td className="p-4">
+                                                <div
+                                                    onClick={() => imprimirEtiqueta(book.codigo, book.titulo)}
+                                                    className="bg-white p-1 rounded border border-gray-200 inline-block shadow-xs cursor-pointer hover:border-library-green hover:bg-gray-50 transition"
+                                                    title="Clique para imprimir etiqueta"
+                                                >
+                                                    <Barcode value={book.codigo || "0000"} format="CODE128" width={1.2} height={35} fontSize={10} margin={2} />
+                                                </div>
+                                            </td>
+
                                             <td className="p-4 text-gray-600">{book.autor}<br /><span className="text-xs text-library-brown font-medium uppercase">{book.categoria}</span></td>
-                                            <td className="p-4"><div className="flex items-center justify-center gap-3"><button onClick={() => handleAlterarEstoque(book.id, book.quantidade, -1)} className="p-1 rounded bg-gray-100 cursor-pointer"><Minus size={14} /></button><span className="font-bold">{book.quantidade}</span><button onClick={() => handleAlterarEstoque(book.id, book.quantidade, 1)} className="p-1 rounded bg-gray-100 cursor-pointer"><Plus size={14} /></button></div></td>
-                                            <td className="p-4 text-center"><div className="flex items-center justify-center gap-2"><button onClick={() => abrirEditarLivro(book)} className="text-blue-500 p-2 cursor-pointer"><Pencil size={16} /></button><button onClick={() => handleExcluirLivro(book.id, book.titulo)} className="text-red-500 p-2 cursor-pointer"><Trash2 size={16} /></button></div></td>
+                                            <td className="p-4">
+                                                <div className="flex items-center justify-center gap-3">
+                                                    <button onClick={() => handleAlterarEstoque(book.id, book.quantidade, -1)} className="p-1 rounded bg-gray-100 cursor-pointer"><Minus size={14} /></button>
+                                                    <span className="font-bold">{book.quantidade}</span>
+                                                    <button onClick={() => handleAlterarEstoque(book.id, book.quantidade, 1)} className="p-1 rounded bg-gray-100 cursor-pointer"><Plus size={14} /></button>
+                                                </div>
+                                            </td>
+                                            <td className="p-4 text-center">
+                                                <div className="flex items-center justify-center gap-2">
+                                                    <button onClick={() => abrirEditarLivro(book)} className="text-blue-500 p-2 cursor-pointer"><Pencil size={16} /></button>
+                                                    <button onClick={() => handleExcluirLivro(book.id, book.titulo)} className="text-red-500 p-2 cursor-pointer"><Trash2 size={16} /></button>
+                                                </div>
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -413,26 +588,124 @@ export default function AdminDashboard() {
                         {/* CARDS LIVROS MOBILE */}
                         <div className="block lg:hidden divide-y divide-gray-100">
                             {books.map(book => (
-                                <div key={book.id} className="p-4 flex items-center gap-3 bg-white">
-                                    <img src={book.capa_url || 'https://via.placeholder.com/40x60?text=No+Cover'} alt="Capa" className="w-12 h-16 object-contain rounded bg-gray-100 shadow-sm flex-shrink-0" />
-                                    <div className="flex-1 min-w-0">
-                                        <p className="font-bold text-gray-900 text-sm truncate">{book.titulo}</p>
-                                        <p className="text-xs text-gray-500 truncate">{book.autor} • {book.categoria}</p>
-                                        <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-mono mt-1 inline-block">Cód: {book.codigo}</span>
-                                        <div className="flex items-center gap-2 mt-2">
+                                <div key={book.id} className="p-4 flex flex-col gap-3 bg-white">
+                                    <div className="flex items-start gap-3">
+                                        <img src={book.capa_url || 'https://via.placeholder.com/40x60?text=No+Cover'} alt="Capa" className="w-12 h-16 object-contain rounded bg-gray-100 shadow-sm flex-shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-gray-900 text-sm truncate">{book.titulo}</p>
+                                            <p className="text-xs text-gray-500 truncate">{book.autor} • {book.categoria}</p>
+                                            <span className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 font-mono mt-1 inline-block">Cód: {book.codigo}</span>
+                                        </div>
+                                        <div className="flex gap-1 border-l pl-2 flex-shrink-0">
+                                            <button onClick={() => abrirEditarLivro(book)} className="text-blue-500 p-1.5 cursor-pointer"><Pencil size={16} /></button>
+                                            <button onClick={() => handleExcluirLivro(book.id, book.titulo)} className="text-red-500 p-1.5 cursor-pointer"><Trash2 size={16} /></button>
+                                        </div>
+                                    </div>
+
+                                    {/* LINHA DE RECURSOS ADICIONAIS NO MOBILE (CÓDIGO DE BARRAS E ESTOQUE) */}
+                                    <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-50">
+                                        {/* CÓDIGO DE BARRAS DO CARD MOBILE */}
+                                        <div
+                                            onClick={() => imprimirEtiqueta(book.codigo, book.titulo)}
+                                            className="bg-white p-1 rounded border border-gray-200 scale-90 origin-left shadow-xs cursor-pointer hover:border-library-green transition"
+                                            title="Clique para imprimir etiqueta"
+                                        >
+                                            <Barcode value={book.codigo || "0000"} format="CODE128" width={1.0} height={28} fontSize={9} margin={1} />
+                                        </div>
+
+                                        <div className="flex items-center gap-2">
                                             <span className="text-xs text-gray-600 font-medium">Estoque:</span>
                                             <button onClick={() => handleAlterarEstoque(book.id, book.quantidade, -1)} className="p-1 bg-gray-100 rounded text-gray-700 cursor-pointer"><Minus size={12} /></button>
                                             <span className="text-sm font-bold text-gray-900 w-4 text-center">{book.quantidade}</span>
                                             <button onClick={() => handleAlterarEstoque(book.id, book.quantidade, 1)} className="p-1 bg-gray-100 rounded text-gray-700 cursor-pointer"><Plus size={12} /></button>
                                         </div>
                                     </div>
-                                    <div className="flex flex-col gap-1 justify-center border-l pl-2">
-                                        <button onClick={() => abrirEditarLivro(book)} className="text-blue-500 p-1.5 cursor-pointer"><Pencil size={16} /></button>
-                                        <button onClick={() => handleExcluirLivro(book.id, book.titulo)} className="text-red-500 p-1.5 cursor-pointer"><Trash2 size={16} /></button>
-                                    </div>
                                 </div>
                             ))}
                         </div>
+                    </div>
+                )}
+
+                {/* NOVA ABA: RELATÓRIOS E COMPROVAÇÕES */}
+                {activeTab === 'estatisticas' && (
+                    <div className="space-y-6 animate-fade-in">
+
+                        {/* Painel Destaque (Cards de Ouro) */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+                            {/* Card do Leitor do Mês */}
+                            <div className="bg-gradient-to-br from-amber-50 to-orange-100 p-6 rounded-2xl border border-amber-200 shadow-sm flex items-center justify-between">
+                                <div>
+                                    <span className="text-amber-800 text-xs font-bold bg-amber-200/60 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                                        🏆 Líder de Leituras / Leitor do Mês
+                                    </span>
+                                    <h4 className="text-2xl font-black text-amber-900 mt-2">{leitorDoMes.nome}</h4>
+                                    <p className="text-sm text-amber-700 mt-0.5">Turma: {leitorDoMes.turma || 'Não informada'}</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-4xl font-extrabold text-amber-600">{leitorDoMes.total}</p>
+                                    <p className="text-xs text-amber-700 font-medium">livros lidos</p>
+                                </div>
+                            </div>
+
+                            {/* Card do Gênero Mais Popular */}
+                            <div className="bg-gradient-to-br from-purple-50 to-indigo-100 p-6 rounded-2xl border border-purple-200 shadow-sm flex items-center justify-between">
+                                <div>
+                                    <span className="text-purple-800 text-xs font-bold bg-purple-200/60 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                                        🔥 Gênero Mais Lido do Acervo
+                                    </span>
+                                    <h4 className="text-2xl font-black text-purple-900 mt-2 capitalize">{generoMaisLido}</h4>
+                                    <p className="text-sm text-purple-700 mt-0.5">Preferência geral dos alunos</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-4xl font-extrabold text-purple-600">{totalGenero}</p>
+                                    <p className="text-xs text-purple-700 font-medium">retiradas</p>
+                                </div>
+                            </div>
+
+                        </div>
+
+                        {/* Tabela do Ranking Geral de Alunos para Competições */}
+                        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                            <div className="p-5 border-b border-gray-100 bg-gray-50/50">
+                                <h3 className="font-bold text-gray-800 text-lg">Ranking Geral de Alunos</h3>
+                                <p className="text-xs text-gray-500">Lista ordenada dos alunos que mais retiraram livros no sistema para premiações</p>
+                            </div>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="bg-gray-50 text-gray-600 text-xs font-bold uppercase border-b border-gray-100">
+                                            <th className="p-4 w-16 text-center">Posição</th>
+                                            <th className="p-4">Nome do Aluno</th>
+                                            <th className="p-4">Turma</th>
+                                            <th className="p-4 text-center">Livros Retirados</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100 text-sm">
+                                        {rankingAlunos.map((aluno, index) => (
+                                            <tr key={index} className="hover:bg-gray-50/80 transition">
+                                                <td className="p-4 text-center font-bold">
+                                                    {index === 0 && '🥇'}
+                                                    {index === 1 && '🥈'}
+                                                    {index === 2 && '🥉'}
+                                                    {index > 2 && `${index + 1}º`}
+                                                </td>
+                                                <td className="p-4 font-semibold text-gray-800">{aluno.nome}</td>
+                                                <td className="p-4 text-gray-600">{aluno.turma || '---'}</td>
+                                                <td className="p-4 text-center font-bold text-library-green bg-green-50/30">{aluno.total}</td>
+                                            </tr>
+                                        ))}
+                                        {rankingAlunos.length === 0 && (
+                                            <tr>
+                                                <td colSpan="4" className="text-center p-8 text-gray-400">Nenhum dado de aluguel encontrado para gerar o ranking.</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
                     </div>
                 )}
 
