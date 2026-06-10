@@ -1,17 +1,22 @@
 // src/components/AddRentalModal.jsx
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { X, BookUser, Calendar, Clock, Phone } from 'lucide-react';
+import { X, BookUser, Calendar, Clock, Phone, Camera } from 'lucide-react';
+import { Html5QrcodeScanner } from 'html5-qrcode';
 import toast from 'react-hot-toast';
 
 export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   const [loading, setLoading] = useState(false);
   const [availableBooks, setAvailableBooks] = useState([]);
   
-  // NOVOS ESTADOS PARA GESTÃO DE ALUNOS
+  // ESTADOS PARA GESTÃO DE ALUNOS
   const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState('');
-  const [isNewStudent, setIsNewStudent] = useState(false); // false = seleciona existente, true = cadastra novo
+  const [isNewStudent, setIsNewStudent] = useState(false);
+
+  // NOVOS ESTADOS PARA A CÂMARA
+  const [isScanning, setIsScanning] = useState(false);
+  const scannerRef = useRef(null);
 
   const hoje = new Date().toISOString().split('T')[0];
 
@@ -27,7 +32,7 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   useEffect(() => {
     if (isOpen) {
       fetchAvailableBooks();
-      fetchStudents(); // Carrega os alunos ao abrir o modal
+      fetchStudents();
       setFormData({
         aluno_nome: '',
         aluno_turma: '',
@@ -38,7 +43,15 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
       });
       setSelectedStudentId('');
       setIsNewStudent(false);
+      setIsScanning(false);
     }
+    
+    // Desliga a câmara se o modal for fechado abruptamente
+    return () => {
+      if (scannerRef.current) {
+        scannerRef.current.clear().catch(err => console.error(err));
+      }
+    };
   }, [isOpen]);
 
   const fetchAvailableBooks = async () => {
@@ -51,7 +64,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     if (!error && data) setAvailableBooks(data);
   };
 
-  // NOVA FUNÇÃO: Procura os alunos registados na nova tabela
   const fetchStudents = async () => {
     const { data, error } = await supabase
       .from('students')
@@ -66,7 +78,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // NOVA FUNÇÃO: Trata a seleção de um aluno existente e preenche o formulário
   const handleStudentChange = (studentId) => {
     setSelectedStudentId(studentId);
     if (studentId === '') {
@@ -84,10 +95,66 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     }
   };
 
+  // --- LÓGICA DA CÂMARA (SCANNER) ---
+  const toggleScanner = () => {
+    if (isScanning) {
+      if (scannerRef.current) {
+        scannerRef.current.clear()
+          .then(() => {
+            setIsScanning(false);
+            scannerRef.current = null;
+          })
+          .catch(err => console.error(err));
+      }
+    } else {
+      setIsScanning(true);
+      setTimeout(() => {
+        const scanner = new Html5QrcodeScanner(
+          "reader", 
+          { 
+            fps: 10, 
+            qrbox: { width: 250, height: 120 },
+            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+          },
+          false
+        );
+        scanner.render(onScanSuccess, onScanFailure);
+        scannerRef.current = scanner;
+      }, 100);
+    }
+  };
+
+  const onScanSuccess = (decodedText) => {
+    const livroEncontrado = availableBooks.find(b => b.codigo === decodedText.trim());
+
+    if (livroEncontrado) {
+      setFormData(prev => ({ ...prev, book_id: livroEncontrado.id }));
+      toast.success(`Livro identificado: "${livroEncontrado.titulo}"`);
+      
+      if (scannerRef.current) {
+        scannerRef.current.clear().then(() => {
+          setIsScanning(false);
+          scannerRef.current = null;
+        });
+      }
+    } else {
+      toast.error(`Código "${decodedText}" lido, mas não há estoque ou não existe.`);
+    }
+  };
+
+  const onScanFailure = (error) => {
+    // Ignorado propositadamente para não poluir a consola
+  };
+  // ------------------------------------
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setLoading(true);
+    if (!formData.book_id) {
+      toast.error('Por favor, selecione ou escaneie um livro.');
+      return;
+    }
 
+    setLoading(true);
     try {
       const dataAluguelObj = new Date(formData.data_aluguel + 'T00:00:00');
       dataAluguelObj.setDate(dataAluguelObj.getDate() + parseInt(formData.tempo_limite, 10));
@@ -96,7 +163,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
       const { data: sessionData } = await supabase.auth.getSession();
       const emailBibliotecario = sessionData?.session?.user?.email || 'Sistema';
 
-      // PASSO NOVO: Se marcou como Novo Aluno, guarda primeiro na base de dados de alunos
       if (isNewStudent && formData.aluno_nome.trim() !== '') {
         const { error: studentError } = await supabase
           .from('students')
@@ -105,11 +171,9 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
             turma: formData.aluno_turma,
             whatsapp: formData.aluno_whatsapp
           }]);
-        
         if (studentError) throw studentError;
       }
 
-      // Criação do aluguer normal (mantendo a compatibilidade da sua tabela antiga)
       const { error: rentalError } = await supabase
         .from('rentals')
         .insert([{
@@ -125,7 +189,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
 
       if (rentalError) throw rentalError;
 
-      // Desconto de estoque do Livro
       const { data: bookData, error: bookFetchError } = await supabase
         .from('books')
         .select('quantidade')
@@ -141,13 +204,13 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
 
       if (bookUpdateError) throw bookUpdateError;
 
-      toast.success('Aluguel registrado com sucesso!');
+      toast.success('Aluguel registado com sucesso!');
       onRentalAdded();
       onClose();
 
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao registrar aluguel.');
+      toast.error('Erro ao registar aluguel.');
     } finally {
       setLoading(false);
     }
@@ -159,7 +222,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-fade-in">
       <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl overflow-hidden transform transition-all animate-scale-in">
         
-        {/* Header */}
         <div className="bg-library-green p-4 text-white flex justify-between items-center">
           <div className="flex items-center gap-2">
             <BookUser size={20} />
@@ -170,172 +232,95 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
           </button>
         </div>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <form onSubmit={handleSubmit} className="space-y-4 p-6 max-h-[85vh] overflow-y-auto">
           
           {/* SELETOR INTERNO: ALUNO NOVO OU EXISTENTE */}
           <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-xl">
-            <button
-              type="button"
-              onClick={() => {
-                setIsNewStudent(false);
-                setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' }));
-                setSelectedStudentId('');
-              }}
-              className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${!isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
+            <button type="button" onClick={() => { setIsNewStudent(false); setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' })); setSelectedStudentId(''); }} className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${!isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
               Aluno Cadastrado
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setIsNewStudent(true);
-                setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' }));
-                setSelectedStudentId('');
-              }}
-              className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-            >
+            <button type="button" onClick={() => { setIsNewStudent(true); setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' })); setSelectedStudentId(''); }} className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
               + Novo Aluno
             </button>
           </div>
 
-          {/* EXIBE LISTA SE O ALUNO FOR JÁ CADASTRADO */}
           {!isNewStudent && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                 <BookUser size={14} /> Selecionar Aluno Registrado
               </label>
-              <select
-                required={!isNewStudent}
-                value={selectedStudentId}
-                onChange={(e) => handleStudentChange(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
-              >
+              <select required={!isNewStudent} value={selectedStudentId} onChange={(e) => handleStudentChange(e.target.value)} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm">
                 <option value="">-- Escolha o Aluno da Lista --</option>
-                {students.map(s => (
-                  <option key={s.id} value={s.id}>{s.nome} ({s.turma || 'Sem Turma'})</option>
-                ))}
+                {students.map(s => <option key={s.id} value={s.id}>{s.nome} ({s.turma || 'Sem Turma'})</option>)}
               </select>
             </div>
           )}
 
-          {/* DADOS DO ALUNO (SÓ PODEM SER EDITADOS SE FOR "NOVO ALUNO") */}
           <div className="space-y-3 pt-2 border-t border-gray-100">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                 <BookUser size={14} /> Nome do Aluno
               </label>
-              <input
-                required
-                disabled={!isNewStudent}
-                type="text"
-                name="aluno_nome"
-                value={formData.aluno_nome}
-                onChange={handleChange}
-                placeholder={isNewStudent ? "Nome completo do aluno" : "Selecione o aluno na lista acima"}
-                className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
-              />
+              <input required disabled={!isNewStudent} type="text" name="aluno_nome" value={formData.aluno_nome} onChange={handleChange} placeholder={isNewStudent ? "Nome completo do aluno" : "Selecione o aluno na lista acima"} className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`} />
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Turma</label>
-                <input
-                  required
-                  disabled={!isNewStudent}
-                  type="text"
-                  name="aluno_turma"
-                  value={formData.aluno_turma}
-                  onChange={handleChange}
-                  placeholder="Ex: 3º Ano A"
-                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
-                />
+                <input required disabled={!isNewStudent} type="text" name="aluno_turma" value={formData.aluno_turma} onChange={handleChange} placeholder="Ex: 3º Ano A" className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
                   <Phone size={14} /> WhatsApp
                 </label>
-                <input
-                  required
-                  disabled={!isNewStudent}
-                  type="text"
-                  name="aluno_whatsapp"
-                  value={formData.aluno_whatsapp}
-                  onChange={handleChange}
-                  placeholder="(00) 00000-0000"
-                  className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`}
-                />
+                <input required disabled={!isNewStudent} type="text" name="aluno_whatsapp" value={formData.aluno_whatsapp} onChange={handleChange} placeholder="(00) 00000-0000" className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none text-sm transition ${!isNewStudent ? 'bg-gray-50 text-gray-500 cursor-not-allowed' : 'bg-white'}`} />
               </div>
             </div>
           </div>
 
-          {/* SELEÇÃO DO LIVRO */}
-          <div className="space-y-3 pt-2 border-t border-gray-100">
+          {/* NOVA ÁREA DE SELEÇÃO E ESCANEAMENTO DO LIVRO */}
+          <div className="border-t border-gray-100 pt-3 space-y-2">
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">Livro Disponível</label>
+                <select required name="book_id" value={formData.book_id} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm">
+                  <option value="">-- Selecione o livro --</option>
+                  {availableBooks.map(book => <option key={book.id} value={book.id}>{book.titulo} ({book.codigo}) - Disponíveis: {book.quantidade}</option>)}
+                </select>
+              </div>
+              
+              <button type="button" onClick={toggleScanner} className={`p-2.5 rounded-lg border font-medium flex items-center justify-center transition cursor-pointer ${isScanning ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' : 'bg-green-50 text-library-green border-green-200 hover:bg-green-100'}`} title="Escanear código de barras">
+                <Camera size={20} />
+              </button>
+            </div>
+
+            {isScanning && (
+              <div className="bg-gray-50 p-2 rounded-xl border border-dashed border-gray-300 overflow-hidden relative animate-fade-in">
+                <div id="reader" className="w-full overflow-hidden rounded-lg"></div>
+                <p className="text-[11px] text-center text-gray-500 mt-1">Aponte a câmara para o código de barras do livro</p>
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Livro Disponível</label>
-              <select
-                required
-                name="book_id"
-                value={formData.book_id}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
-              >
-                <option value="">-- Selecione o livro --</option>
-                {availableBooks.map(book => (
-                  <option key={book.id} value={book.id}>
-                    {book.titulo} ({book.codigo}) - Disponíveis: {book.quantidade}
-                  </option>
-                ))}
-              </select>
+              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                <Calendar size={14} /> Data do Aluguel
+              </label>
+              <input required type="date" name="data_aluguel" value={formData.data_aluguel} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
             </div>
-
-            {/* DATAS */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                  <Calendar size={14} /> Data do Aluguel
-                </label>
-                <input
-                  required
-                  type="date"
-                  name="data_aluguel"
-                  value={formData.data_aluguel}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                  <Clock size={14} /> Tempo Limite (Dias)
-                </label>
-                <input
-                  required
-                  type="number"
-                  min="1"
-                  name="tempo_limite"
-                  value={formData.tempo_limite}
-                  onChange={handleChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm"
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+                <Clock size={14} /> Tempo Limite (Dias)
+              </label>
+              <input required type="number" min="1" name="tempo_limite" value={formData.tempo_limite} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
             </div>
           </div>
 
-          {/* BOTÕES DE AÇÃO */}
           <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer text-sm font-medium"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              disabled={loading}
-              className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 font-medium text-sm cursor-pointer"
-            >
-              {loading ? 'Registrando...' : 'Confirmar Aluguel'}
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer text-sm font-medium">Cancelar</button>
+            <button type="submit" disabled={loading} className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 font-medium text-sm cursor-pointer">
+              {loading ? 'A Registar...' : 'Confirmar Aluguel'}
             </button>
           </div>
         </form>
