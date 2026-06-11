@@ -2,7 +2,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { X, BookUser, Calendar, Clock, Phone, Camera } from 'lucide-react';
-import { Html5QrcodeScanner } from 'html5-qrcode';
+// IMPORTANTE: Mudamos de Html5QrcodeScanner para Html5Qrcode
+import { Html5Qrcode } from 'html5-qrcode';
 import toast from 'react-hot-toast';
 
 export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
@@ -14,9 +15,9 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [isNewStudent, setIsNewStudent] = useState(false);
 
-  // NOVOS ESTADOS PARA A CÂMARA
+  // NOVOS ESTADOS PARA A CÂMERA
   const [isScanning, setIsScanning] = useState(false);
-  const scannerRef = useRef(null);
+  const html5QrCodeRef = useRef(null);
 
   const hoje = new Date().toISOString().split('T')[0];
 
@@ -46,10 +47,10 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
       setIsScanning(false);
     }
     
-    // Desliga a câmara se o modal for fechado abruptamente
+    // Desliga a câmera de verdade se o modal for fechado pelo "X" ou "Cancelar"
     return () => {
-      if (scannerRef.current) {
-        scannerRef.current.clear().catch(err => console.error(err));
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        html5QrCodeRef.current.stop().catch(err => console.error("Erro ao desligar:", err));
       }
     };
   }, [isOpen]);
@@ -95,55 +96,85 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
     }
   };
 
-  // --- LÓGICA DA CÂMARA (SCANNER) ---
-  const toggleScanner = () => {
-    if (isScanning) {
-      if (scannerRef.current) {
-        scannerRef.current.clear()
-          .then(() => {
-            setIsScanning(false);
-            scannerRef.current = null;
-          })
-          .catch(err => console.error(err));
+  // --- NOVA LÓGICA DA CÂMERA (CONTROLE TOTAL) ---
+
+  // Função para ligar uma câmera específica (Frontal ou Traseira)
+  const startScannerWithMode = async (facingMode) => {
+    try {
+      // Se não existir o leitor ainda, a gente cria atrelado à div "reader"
+      if (!html5QrCodeRef.current) {
+        html5QrCodeRef.current = new Html5Qrcode("reader");
       }
-    } else {
-      setIsScanning(true);
-      setTimeout(() => {
-        const scanner = new Html5QrcodeScanner(
-          "reader", 
-          { 
-            fps: 10, 
-            qrbox: { width: 250, height: 120 },
-            experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-          },
-          false
-        );
-        scanner.render(onScanSuccess, onScanFailure);
-        scannerRef.current = scanner;
-      }, 100);
+      
+      const html5QrCode = html5QrCodeRef.current;
+
+      // Se já houver uma câmera ligada, desliga antes de ligar a nova
+      if (html5QrCode.isScanning) {
+        await html5QrCode.stop();
+      }
+
+      // Inicia com a câmera escolhida (user = Frontal, environment = Traseira)
+      await html5QrCode.start(
+        { facingMode: facingMode },
+        { 
+          fps: 10, 
+          qrbox: { width: 250, height: 120 },
+          experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+        },
+        onScanSuccess,
+        onScanFailure
+      );
+    } catch (err) {
+      console.error("Erro ao iniciar câmera:", err);
+      toast.error("Não foi possível acessar a câmera solicitada.");
     }
   };
 
+  // Botão principal: Pede permissão e mostra as opções
+  const handleStartScanner = async () => {
+    try {
+      // Isso forçará o navegador a pedir permissão de câmera IMEDIATAMENTE
+      const devices = await Html5Qrcode.getCameras();
+      
+      if (devices && devices.length > 0) {
+        setIsScanning(true); // Exibe o painel da câmera
+        
+        // Aguarda 100ms para o React renderizar a <div id="reader"> antes de ligar o vídeo
+        setTimeout(() => {
+          startScannerWithMode("environment"); // Começa pela Traseira automaticamente
+        }, 100);
+      } else {
+        toast.error("Nenhuma câmera encontrada no seu dispositivo.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Permissão de câmera negada. Autorize no navegador para escanear.");
+    }
+  };
+
+  // Função para o botão "Parar"
+  const handleStopScanner = async () => {
+    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+      await html5QrCodeRef.current.stop();
+    }
+    setIsScanning(false);
+  };
+
+  // Quando o código for lido com sucesso
   const onScanSuccess = (decodedText) => {
     const livroEncontrado = availableBooks.find(b => b.codigo === decodedText.trim());
 
     if (livroEncontrado) {
       setFormData(prev => ({ ...prev, book_id: livroEncontrado.id }));
       toast.success(`Livro identificado: "${livroEncontrado.titulo}"`);
-      
-      if (scannerRef.current) {
-        scannerRef.current.clear().then(() => {
-          setIsScanning(false);
-          scannerRef.current = null;
-        });
-      }
+      handleStopScanner(); // Desliga a câmera imediatamente após achar o livro
     } else {
       toast.error(`Código "${decodedText}" lido, mas não há estoque ou não existe.`);
     }
   };
 
   const onScanFailure = (error) => {
-    // Ignorado propositadamente para não poluir a consola
+    // Ignorado propositadamente para não poluir a consola enquanto ele foca
   };
   // ------------------------------------
 
@@ -234,7 +265,6 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
 
         <form onSubmit={handleSubmit} className="space-y-4 p-6 max-h-[85vh] overflow-y-auto">
           
-          {/* SELETOR INTERNO: ALUNO NOVO OU EXISTENTE */}
           <div className="grid grid-cols-2 gap-2 p-1 bg-gray-100 rounded-xl">
             <button type="button" onClick={() => { setIsNewStudent(false); setFormData(prev => ({ ...prev, aluno_nome: '', aluno_turma: '', aluno_whatsapp: '' })); setSelectedStudentId(''); }} className={`py-2 text-xs font-bold rounded-lg transition cursor-pointer ${!isNewStudent ? 'bg-white text-library-green shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
               Aluno Cadastrado
@@ -278,7 +308,7 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
             </div>
           </div>
 
-          {/* NOVA ÁREA DE SELEÇÃO E ESCANEAMENTO DO LIVRO */}
+          {/* NOVA ÁREA DE SELEÇÃO E ESCANEAMENTO DO LIVRO COM BOTÕES CUSTOMIZADOS */}
           <div className="border-t border-gray-100 pt-3 space-y-2">
             <div className="flex items-end gap-2">
               <div className="flex-1">
@@ -289,15 +319,35 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
                 </select>
               </div>
               
-              <button type="button" onClick={toggleScanner} className={`p-2.5 rounded-lg border font-medium flex items-center justify-center transition cursor-pointer ${isScanning ? 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100' : 'bg-green-50 text-library-green border-green-200 hover:bg-green-100'}`} title="Escanear código de barras">
-                <Camera size={20} />
-              </button>
+              {/* Só exibe o botão verde se a câmera não estiver ligada */}
+              {!isScanning && (
+                <button type="button" onClick={handleStartScanner} className="p-2.5 rounded-lg border font-medium flex items-center justify-center transition cursor-pointer bg-green-50 text-library-green border-green-200 hover:bg-green-100" title="Abrir Câmera">
+                  <Camera size={20} />
+                </button>
+              )}
             </div>
 
+            {/* PAINEL DA CÂMERA (SÓ APARECE QUANDO LIGADO) */}
             {isScanning && (
-              <div className="bg-gray-50 p-2 rounded-xl border border-dashed border-gray-300 overflow-hidden relative animate-fade-in">
-                <div id="reader" className="w-full overflow-hidden rounded-lg"></div>
-                <p className="text-[11px] text-center text-gray-500 mt-1">Aponte a câmara para o código de barras do livro</p>
+              <div className="bg-gray-50 p-3 rounded-xl border border-gray-200 animate-fade-in space-y-3">
+                
+                {/* 3 OPÇÕES SOLICITADAS */}
+                <div className="flex gap-2 justify-center">
+                  <button type="button" onClick={() => startScannerWithMode("user")} className="flex-1 py-1.5 px-2 bg-white border border-gray-300 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-100 transition cursor-pointer shadow-sm">
+                    Frontal
+                  </button>
+                  <button type="button" onClick={() => startScannerWithMode("environment")} className="flex-1 py-1.5 px-2 bg-white border border-gray-300 rounded-md text-xs font-semibold text-gray-700 hover:bg-gray-100 transition cursor-pointer shadow-sm">
+                    Traseira
+                  </button>
+                  <button type="button" onClick={handleStopScanner} className="flex-1 py-1.5 px-2 bg-red-50 border border-red-200 rounded-md text-xs font-semibold text-red-600 hover:bg-red-100 transition cursor-pointer shadow-sm">
+                    ❌ Parar
+                  </button>
+                </div>
+
+                {/* DIV ONDE O VÍDEO SERÁ RENDERIZADO */}
+                <div id="reader" className="w-full overflow-hidden rounded-lg bg-black min-h-[150px]"></div>
+                
+                <p className="text-[11px] text-center text-gray-500">Aponte a câmera para o código do livro</p>
               </div>
             )}
           </div>
@@ -311,7 +361,7 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                <Clock size={14} /> Tempo Limite (Dias)
+                <Clock size={14} /> Tempo Limite
               </label>
               <input required type="number" min="1" name="tempo_limite" value={formData.tempo_limite} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
             </div>

@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock, BarChart3 } from 'lucide-react';
+import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock, BarChart3, Printer } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AddBookModal from '../components/AddBookModal';
 import AddRentalModal from '../components/AddRentalModal';
@@ -24,6 +24,7 @@ export default function AdminDashboard() {
     const [isAddRentalModalOpen, setIsAddRentalModalOpen] = useState(false);
     const [isEditBookModalOpen, setIsEditBookModalOpen] = useState(false);
     const [selectedBookForEdit, setSelectedBookForEdit] = useState(null);
+    const [barcodeModal, setBarcodeModal] = useState({ isOpen: false, book: null });
 
     useEffect(() => {
         checkUser();
@@ -557,9 +558,9 @@ export default function AdminDashboard() {
                                             {/* CÓDIGO DE BARRAS DA TABELA PC */}
                                             <td className="p-4">
                                                 <div
-                                                    onClick={() => imprimirEtiqueta(book.codigo, book.titulo)}
+                                                    onClick={() => setBarcodeModal({ isOpen: true, book: book })}
                                                     className="bg-white p-1 rounded border border-gray-200 inline-block shadow-xs cursor-pointer hover:border-library-green hover:bg-gray-50 transition"
-                                                    title="Clique para imprimir etiqueta"
+                                                    title="Clique para visualizar e imprimir"
                                                 >
                                                     <Barcode value={book.codigo || "0000"} format="CODE128" width={1.2} height={35} fontSize={10} margin={2} />
                                                 </div>
@@ -606,9 +607,9 @@ export default function AdminDashboard() {
                                     <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-gray-50">
                                         {/* CÓDIGO DE BARRAS DO CARD MOBILE */}
                                         <div
-                                            onClick={() => imprimirEtiqueta(book.codigo, book.titulo)}
+                                            onClick={() => setBarcodeModal({ isOpen: true, book: book })}
                                             className="bg-white p-1 rounded border border-gray-200 scale-90 origin-left shadow-xs cursor-pointer hover:border-library-green transition"
-                                            title="Clique para imprimir etiqueta"
+                                            title="Clique para visualizar e imprimir"
                                         >
                                             <Barcode value={book.codigo || "0000"} format="CODE128" width={1.0} height={28} fontSize={9} margin={1} />
                                         </div>
@@ -706,6 +707,46 @@ export default function AdminDashboard() {
                             </div>
                         </div>
 
+                    </div>
+                )}
+
+                {barcodeModal.isOpen && barcodeModal.book && (
+                    <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 animate-fade-in">
+                        <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 text-center transform transition-all animate-scale-in">
+                            <h3 className="font-bold text-gray-800 text-lg mb-1 truncate">
+                                {barcodeModal.book.titulo}
+                            </h3>
+                            <p className="text-sm text-gray-500 mb-6">Visualização da Etiqueta</p>
+
+                            <div className="bg-white p-4 rounded-xl border-2 border-dashed border-gray-200 flex justify-center mb-8">
+                                <Barcode
+                                    value={barcodeModal.book.codigo || "0000"}
+                                    format="CODE128"
+                                    width={2}
+                                    height={60}
+                                    fontSize={14}
+                                    margin={0}
+                                />
+                            </div>
+
+                            <div className="flex gap-3 justify-center">
+                                <button
+                                    onClick={() => setBarcodeModal({ isOpen: false, book: null })}
+                                    className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 font-medium rounded-lg hover:bg-gray-200 transition cursor-pointer"
+                                >
+                                    Fechar
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        imprimirEtiqueta(barcodeModal.book.codigo, barcodeModal.book.titulo);
+                                        setBarcodeModal({ isOpen: false, book: null }); // Fecha o modal após imprimir
+                                    }}
+                                    className="flex-1 px-4 py-2.5 bg-library-green text-white font-medium rounded-lg hover:bg-opacity-90 transition flex items-center justify-center gap-2 cursor-pointer shadow-sm"
+                                >
+                                    <Printer size={18} /> Imprimir
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 )}
 
