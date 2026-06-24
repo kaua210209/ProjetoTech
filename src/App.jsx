@@ -9,7 +9,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-library-bg font-sans text-gray-800">
-        <Toaster position="top-right" />
+        <Toaster position="top-right" toastOptions={{duration: 7000,}}/>
         <Routes>
           <Route path="/" element={<Catalog />} />
           <Route path="/login" element={<Login />} />
