@@ -235,13 +235,13 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
 
       if (bookUpdateError) throw bookUpdateError;
 
-      toast.success('Aluguel registado com sucesso!');
+      toast.success('Emprestimo registado com sucesso!');
       onRentalAdded();
       onClose();
 
     } catch (error) {
       console.error(error);
-      toast.error('Erro ao registar aluguel.');
+      toast.error('Erro ao registar Emprestimo.');
     } finally {
       setLoading(false);
     }
@@ -256,7 +256,7 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
         <div className="bg-library-green p-4 text-white flex justify-between items-center">
           <div className="flex items-center gap-2">
             <BookUser size={20} />
-            <h3 className="font-bold text-lg">Novo Aluguel de Livro</h3>
+            <h3 className="font-bold text-lg">Novo Emprestimo de Livro</h3>
           </div>
           <button onClick={onClose} className="hover:bg-white/20 p-1 rounded-full transition cursor-pointer">
             <X size={20} />
@@ -355,9 +355,9 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
-                <Calendar size={14} /> Data do Aluguel
+                <Calendar size={14} /> Data do Emprestimo
               </label>
-              <input required type="date" name="data_aluguel" value={formData.data_aluguel} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
+              <input required type="date" name="data_emprestimo" value={formData.data_emprestimo} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none bg-white text-sm" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
@@ -370,7 +370,7 @@ export default function AddRentalModal({ isOpen, onClose, onRentalAdded }) {
           <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
             <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer text-sm font-medium">Cancelar</button>
             <button type="submit" disabled={loading} className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 font-medium text-sm cursor-pointer">
-              {loading ? 'A Registar...' : 'Confirmar Aluguel'}
+              {loading ? 'A Registar...' : 'Confirmar Empréstimo'}
             </button>
           </div>
         </form>

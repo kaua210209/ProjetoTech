@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock, BarChart3, Printer } from 'lucide-react';
+import { LogOut, Book, Users, Trash2, Pencil, Plus, Minus, MessageCircle, Menu, X, CalendarCheck, CalendarX, Clock, BarChart3, Printer, ArrowLeft } from 'lucide-react';
 import toast from 'react-hot-toast';
 import AddBookModal from '../components/AddBookModal';
 import AddRentalModal from '../components/AddRentalModal';
@@ -151,7 +151,7 @@ export default function AdminDashboard() {
     };
 
     const enviarReciboWhatsApp = (rental) => {
-        const mensagem = `Olá, *${rental.aluno_nome}*! 📚\nLembramos do seu aluguel do livro: *${rental.books?.titulo}*.\n⚠️ Prazo limite para devolução: *${formatarData(rental.data_devolucao)}*.\nObrigado!`;
+        const mensagem = `Olá, *${rental.aluno_nome}*! 📚\nLembramos do seu Emprestimo do livro: *${rental.books?.titulo}*.\n⚠️ Prazo limite para devolução: *${formatarData(rental.data_devolucao)}*.\nObrigado!`;
         let numeroLimpo = rental.aluno_whatsapp ? rental.aluno_whatsapp.replace(/\D/g, '') : '';
         if (numeroLimpo && numeroLimpo.length <= 11 && !numeroLimpo.startsWith('55')) numeroLimpo = '55' + numeroLimpo;
         window.open(`https://api.whatsapp.com/send?phone=${numeroLimpo}&text=${encodeURIComponent(mensagem)}`, '_blank');
@@ -324,7 +324,7 @@ export default function AdminDashboard() {
                         onClick={() => { setActiveTab('alugueis'); setIsMenuMobileOpen(false); }}
                         className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'alugueis' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
                     >
-                        <Users size={20} /> Aluguéis
+                        <Users size={20} /> Emprestimos
                     </button>
                     <button
                         onClick={() => { setActiveTab('livros'); setIsMenuMobileOpen(false); }}
@@ -337,6 +337,12 @@ export default function AdminDashboard() {
                         className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === 'estatisticas' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
                     >
                         <BarChart3 size={20} /> Estatísticas e Ranking
+                    </button>
+                    <button
+                        onClick={() => { navigate('/'); setIsMenuMobileOpen(false); }}
+                        className={`w-full flex items-center gap-3 p-3 rounded-lg text-left cursor-pointer transition ${activeTab === '/' ? 'bg-white/20 font-bold' : 'hover:bg-white/10'}`}
+                    >
+                        <ArrowLeft size={20} /> Voltar ao Catalogo
                     </button>
                 </nav>
 
@@ -357,8 +363,8 @@ export default function AdminDashboard() {
 
                 {/* CARDS DE MÉTRICAS */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500"><p className="text-gray-500 text-xs font-semibold">Aluguéis no Prazo</p><p className="text-2xl font-bold mt-1 text-blue-600">{stats.ativos}</p></div>
-                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500"><p className="text-gray-500 text-xs font-semibold">Aluguéis Atrasados</p><p className="text-2xl font-bold mt-1 text-red-600">{stats.atrasados}</p></div>
+                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-blue-500"><p className="text-gray-500 text-xs font-semibold">Emprestimos no Prazo</p><p className="text-2xl font-bold mt-1 text-blue-600">{stats.ativos}</p></div>
+                    <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-red-500"><p className="text-gray-500 text-xs font-semibold">Emprestimos Atrasados</p><p className="text-2xl font-bold mt-1 text-red-600">{stats.atrasados}</p></div>
                     <div className="bg-white p-4 rounded-xl shadow-sm border-l-4 border-green-500"><p className="text-gray-500 text-xs font-semibold">Histórico Total</p><p className="text-2xl font-bold mt-1 text-green-600">{stats.total}</p></div>
                     <div className="bg-white p-5 rounded-xl shadow-sm border-l-4 border-purple-500"><p className="text-gray-500 text-xs font-semibold">Total de Livros (Acervo)</p><p className="text-2xl font-bold mt-1 text-purple-600">{stats.livrosTotal}</p>
                     </div>
@@ -410,14 +416,14 @@ export default function AdminDashboard() {
                                 onClick={() => setIsAddRentalModalOpen(true)}
                                 className="w-full md:w-auto bg-library-brown text-white py-2 px-4 rounded-lg text-xs sm:text-sm font-bold hover:bg-opacity-95 transition cursor-pointer shadow-sm text-center"
                             >
-                                + Novo Aluguel
+                                + Novo Emprestimo
                             </button>
                         </div>
 
                         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
                             <div className="p-4 sm:p-6 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                                 <h3 className="text-lg sm:text-xl font-bold text-gray-800 capitalize">
-                                    {statusFilter === 'no_prazo' && 'Aluguéis Ativos no Prazo'}
+                                    {statusFilter === 'no_prazo' && 'Empréstimos Ativos no Prazo'}
                                     {statusFilter === 'atrasados' && 'Livros Pendentes / Atrasados'}
                                     {statusFilter === 'devolvidos' && 'Histórico de Livros Devolvidos'}
                                 </h3>
@@ -455,7 +461,7 @@ export default function AdminDashboard() {
                                                         <br /><span className="text-xs text-gray-400">{rental.bibliotecario_email || 'n/a'}</span>
                                                     </td>
                                                     <td className="p-4 text-xs">
-                                                        <span className="block"><strong>Alugado:</strong> {formatarData(rental.data_aluguel)}</span>
+                                                        <span className="block"><strong>Emprestado:</strong> {formatarData(rental.data_aluguel)}</span>
                                                         <span className="text-amber-700 block"><strong>Prazo:</strong> {formatarData(rental.data_devolucao)}</span>
                                                         {rental.status === 'Devolvido' && (
                                                             <span className="text-green-600 font-bold block bg-green-50 px-1 py-0.5 rounded mt-1 w-max">Devolvido em: {formatarData(rental.data_devolucao_real)}</span>
@@ -504,7 +510,7 @@ export default function AdminDashboard() {
                                             <div className="text-xs text-gray-700 bg-gray-50 p-2 rounded space-y-1">
                                                 <p className="font-semibold text-library-green">📖 {rental.books?.titulo} ({rental.books?.codigo})</p>
                                                 <p>👤 <strong>Bibliotecário:</strong> {rental.bibliotecario_email || 'n/a'}</p>
-                                                <p>📅 <strong>Alugado em:</strong> {formatarData(rental.data_aluguel)}</p>
+                                                <p>📅 <strong>Emprestado em:</strong> {formatarData(rental.data_aluguel)}</p>
                                                 <p className="text-amber-700 font-medium">⚠️ <strong>Prazo Limite:</strong> {formatarData(rental.data_devolucao)}</p>
                                                 {rental.status === 'Devolvido' && <p className="text-green-600 font-bold">✅ Devolvido em: {formatarData(rental.data_devolucao_real)}</p>}
                                                 {rental.aluno_whatsapp && <p className="text-green-600 font-medium">📱 <strong>WhatsApp:</strong> {rental.aluno_whatsapp}</p>}

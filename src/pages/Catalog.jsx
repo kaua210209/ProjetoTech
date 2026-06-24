@@ -173,9 +173,9 @@ export default function Catalog() {
                     <button 
                       disabled={book.quantidade === 0}
                       className="flex-1 bg-library-green text-white py-2 rounded-lg text-xs sm:text-sm font-medium disabled:opacity-50 hover:bg-opacity-90 transition cursor-pointer text-center"
-                      onClick={() => toast.success(`Solicite o aluguel do livro "${book.titulo}" diretamente ao bibliotecário!`)}
+                      onClick={() => toast.success(`Solicite o empréstimo do livro "${book.titulo}" diretamente ao bibliotecário!`)}
                     >
-                      Alugar
+                      Empréstimo
                     </button>
                   </div>
                 </div>
@@ -242,7 +242,7 @@ export default function Catalog() {
                 onClick={() => setIsSynopsisModalOpen(false)}
                 className="px-5 py-2 bg-library-green text-white text-sm font-bold rounded-xl hover:bg-opacity-90 transition cursor-pointer shadow-sm"
               >
-                Entendi, Fechar
+                Fechar
               </button>
             </div>
 
