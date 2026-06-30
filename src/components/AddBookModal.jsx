@@ -1,11 +1,14 @@
 // src/components/AddBookModal.jsx
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { supabase } from '../lib/supabase';
-import { X } from 'lucide-react';
+import { X, Camera, Loader2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
   const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef(null);
+
   const [formData, setFormData] = useState({
     codigo: '',
     titulo: '',
@@ -24,6 +27,42 @@ export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // Nova função para processar e fazer upload da foto tirada pela câmera
+  const handleCapturePhoto = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setUploading(true);
+      
+      // Gera um nome único para a imagem usando o timestamp atual
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `public/${fileName}`;
+
+      // 1. Faz o upload da foto para o Storage do Supabase (Bucket: capas-livros)
+      const { error: uploadError } = await supabase.storage
+        .from('capas-livros')
+        .upload(filePath, file);
+
+      if (uploadError) throw uploadError;
+
+      // 2. Busca a URL pública do arquivo enviado
+      const { data } = supabase.storage
+        .from('capas-livros')
+        .getPublicUrl(filePath);
+
+      // 3. Salva a URL gerada no estado do formulário
+      setFormData(prev => ({ ...prev, capa_url: data.publicUrl }));
+      toast.success('Foto da capa vinculada com sucesso!');
+    } catch (error) {
+      console.error(error);
+      toast.error('Erro ao processar/enviar a foto da câmera.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -37,7 +76,7 @@ export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
     ]);
 
     if (error) {
-      if (error.code === '23505') { // Código de erro do Postgres para valor único duplicado
+      if (error.code === '23505') {
         toast.error('Já existe um livro com este código!');
       } else {
         toast.error('Erro ao cadastrar livro.');
@@ -45,9 +84,8 @@ export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
       }
     } else {
       toast.success('Livro cadastrado com sucesso!');
-      onBookAdded(); // Atualiza a lista no Dashboard
-      onClose(); // Fecha o modal
-      // Limpa o formulário
+      onBookAdded();
+      onClose();
       setFormData({
         codigo: '', titulo: '', autor: '', categoria: 'Romance', 
         ano_publicacao: '', quantidade: 1, capa_url: '', sinopse: ''
@@ -63,7 +101,7 @@ export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
       <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex justify-between items-center p-6 border-b border-gray-100">
           <h2 className="text-xl font-bold text-gray-800">Cadastrar Novo Livro</h2>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition">
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition cursor-pointer">
             <X size={24} />
           </button>
         </div>
@@ -95,18 +133,57 @@ export default function AddBookModal({ isOpen, onClose, onBookAdded }) {
             <label className="block text-sm font-medium text-gray-700 mb-1">Quantidade em Estoque</label>
             <input required type="number" min="1" name="quantidade" value={formData.quantidade} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" />
           </div>
+          
+          {/* Campo de URL Refatorado com suporte a Câmera */}
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">URL da Capa (Imagem)</label>
-            <input type="url" name="capa_url" value={formData.capa_url} onChange={handleChange} placeholder="https://..." className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" />
+            <div className="flex gap-2">
+              <input 
+                type="url" 
+                name="capa_url" 
+                value={formData.capa_url} 
+                onChange={handleChange} 
+                placeholder="https://... ou use a câmera ao lado" 
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none" 
+              />
+              
+              {/* Input invisível focado em capturar imagem usando a câmera nativa do dispositivo */}
+              <input 
+                type="file"
+                accept="image/*"
+                capture="environment"
+                ref={fileInputRef}
+                onChange={handleCapturePhoto}
+                className="hidden"
+              />
+
+              {/* Botão Visual da Câmera */}
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 bg-library-green text-white text-sm font-semibold rounded-lg hover:bg-opacity-90 transition flex items-center gap-2 font-medium disabled:opacity-50 cursor-pointer shadow-sm"
+              >
+                {uploading ? (
+                  <Loader2 className="animate-spin" size={18} />
+                ) : (
+                  <>
+                    <Camera size={18} />
+                    <span>Câmera</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
+
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">Sinopse</label>
             <textarea rows="3" name="sinopse" value={formData.sinopse} onChange={handleChange} className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-library-green outline-none"></textarea>
           </div>
 
           <div className="md:col-span-2 flex justify-end gap-3 mt-4">
-            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition">Cancelar</button>
-            <button type="submit" disabled={loading} className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-gray-600 bg-gray-100 rounded-lg hover:bg-gray-200 transition cursor-pointer">Cancelar</button>
+            <button type="submit" disabled={loading} className="px-4 py-2 text-white bg-library-green rounded-lg hover:bg-opacity-90 transition disabled:opacity-50 cursor-pointer">
               {loading ? 'Salvando...' : 'Salvar Livro'}
             </button>
           </div>
